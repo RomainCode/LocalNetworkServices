@@ -1,0 +1,395 @@
+<html>
+<head>
+<script src="eel.js"></script>
+<title>LocalNetworkServices v0.1</title>
+<link rel="stylesheet" type="text/css" href="style.css">
+<script>
+
+	// sendToPython request : type&&subdivision&&content
+	// sendToGui request : type&&subdivision&&content
+var file_name = "test";
+var IPv4 = "192.168.1.60"
+var port = "8001"
+var nicknames_dict = {}
+
+	function callPython(div_name) {
+		var div = document.getElementById(div_name);
+		if (div_name == 'message_contenue') {
+			eel.sendToPython('message&&'+div.value);
+
+		}
+		if (div_name == 'file_transfer_contenue') {
+			eel.sendToPython('file_transfer&&'+"GO");
+		}
+		if (div_name == 'nick_name_contenue') {
+			if (div.value != "") {
+				eel.sendToPython('nick_name&&'+div.value);
+			}
+			else{
+				eel.sendToPython('nick_name&&'+"Unknown");
+			}
+		}
+		
+	}
+
+	function pressButton(buttonId) {
+		eel.sendToPython('button&&'+buttonId)
+	}
+
+	function sendToGui(text){
+		data_raw = text.split("&&");
+		console.log(data_raw)
+		type = data_raw[0];
+		subdivision = data_raw[1];
+		content = data_raw[2];
+
+		if (type == "message"){
+			var div = document.getElementById("message_content");
+			data = content.split("°°")
+			div.innerHTML = div.innerHTML + "<br>" + data[0] + " : " + data[1];
+			var objDiv = document.getElementById("message_content");
+			objDiv.scrollTop = objDiv.scrollHeight;
+		}
+		if (type== "file"){
+			if (subdivision == "received"){
+				var div = document.getElementById("received_files");
+				dat = content.split("°°");
+				div.innerHTML += dat[0] + ` : ` + `<button class="link_file_style" id="`+ dat[1].toString() +`">`+ dat[1] +`</button><br>` 
+				document.getElementById(dat[1].toString()).setAttribute('onclick', `link_file('` + dat[1].toString() + `')`)
+				//document.getElementById("received_files")file_name
+
+			}
+			if (subdivision == "send"){
+				c = 1
+			}
+			if (subdivision == "file_name"){
+				var div = document.getElementById("file_name");
+				dat = content.split("°°");
+				console.log(dat)
+				file_name = dat[0];
+				div.innerHTML = dat[0];
+				console.log(dat)
+				document.getElementById("dest_commit_list").style.display = "block";
+
+				document.getElementById("dest_list_clients").innerHTML = "<p>List of all the clients : </p><br>";
+				console.log("recreation of dest_list")
+				var dest_list_clients = document.getElementById("dest_list_clients");
+				for (dest in nicknames_dict){
+					console.log(dest.toString())
+					dest_list_clients.innerHTML += `<div id="group_input_label"><input style="display: block;" type="checkbox" id="`+ dest.toString() +`"><label>`+ nicknames_dict[dest] +`</label></div><br>`;
+					file_des_onclick = `file_dest&&`+dest.toString().replace('"', "").replace("'", "").replace("'", "").replace('"', "'");
+					//document.getElementById(dest.toString().replace("'", '')).style.width = "30pc";
+					document.getElementById(dest.toString()).setAttribute('onclick', `eel.sendToPython('${file_des_onclick}')`);
+				}
+			}
+			if (subdivision == "progress"){
+				document.getElementById("dest_commit_list").style.display = "none";
+				//document.getElementById("send_file_button").style.display = "none";
+				var div = document.getElementById("progress_bar");
+				c = Math.round((parseFloat(content)*100)*100)/100
+				div.innerHTML = c.toString()+"%"
+				if (c.toString()+"%" == "100%"){
+					div.innerHTML = "";
+					alert("Transfer of the file ended.");
+				}
+			}
+			if (subdivision=="agree_to_send") {
+				dat = content.split("°°");
+				name = dat[0];
+				ip_port = dat[1];
+				filename = dat[2];
+				document.getElementById("confirm_text").innerHTML = "Do you accept a file from : " + name + ", who have by address : " + ip_port + " ?<br> The file name is : " + filename;
+				document.getElementById("confirm_box").style.display = "block";
+			}
+		}
+
+		if (type == "users"){
+			if (subdivision == "post"){
+				nicknames_dict = {};
+				var div = document.getElementById("users");
+				div.innerHTML = ""
+				dat = content.replace("{", "");
+				dat = dat.replace("}", "");
+				users_data_list = dat.split(",,");
+				console.log(users_data_list);
+				for (user_data in users_data_list){
+					console.log(user_data);
+					user_d = users_data_list[user_data].split("::");
+					console.log(user_d)
+					if (user_d[1] != undefined){
+						nicknames_dict[user_d[0]] = user_d[1]
+						mouseover = user_d[0].replace("'", "").replace("(", "").replace(")", "").replace("'", "").replace(", ", ":");
+						div.innerHTML = div.innerHTML + "<br> <b title='" + mouseover  + "'>" + user_d[1] + "</b>";}
+				}
+
+			}
+		}
+
+		if (type == "power"){
+			if (subdivision == "off") {
+				window.close()
+			}
+			
+			if (subdivision == "on") {
+				document.getElementById('Boot_button').style.display = 'none';
+				document.getElementById('Shut_down_button').style.display = 'block';
+		    	document.getElementById('menu1').disabled = false;
+				document.getElementById('menu2').disabled = false;
+				document.getElementById('menu3').disabled = false;
+				document.getElementById('menu1').checked = true;
+				document.getElementById('menu2').checked = true;
+				document.getElementById('menu3').checked = true;
+				document.getElementById('error_connect').innerHTML = '';
+			}
+				
+			if (subdivision == "error") {
+				document.getElementById('error_connect').innerHTML = content;
+				document.getElementById("Choose_ip_port").style.display = "block";
+			}
+
+			if (subdivision == "identification_saved") {
+				document.getElementById('error_connect').innerHTML = content;
+				document.getElementById("Choose_ip_port").style.display = "none";
+				document.getElementById("Boot_button").style.display = "block";
+			}
+
+			if (subdivision == "reconnect") {
+				alert("Connection with the server lost... \nIf yon want to reconnect, click on 'Choose a new server address'")
+				document.getElementById('error_connect').innerHTML = 'The connection beetween you and the server is broken. Please reconnect';
+				document.getElementById('file_transfer_content').innerHTML = ""
+				document.getElementById('file_name').innerHTML = ""
+				document.getElementById('progress_bar').innerHTML = ""
+				document.getElementById("Choose_ip_port").style.display = "block";
+				document.getElementById("Shut_down_button").style.display = "none";
+				document.getElementById('nick_name_content').innerHTML = ""
+				document.getElementById('menu1').checked = false;
+				document.getElementById('menu2').checked = false;
+				document.getElementById('menu3').checked = false;
+				document.getElementById('menu1').disabled = true;
+				document.getElementById('menu2').disabled = true;
+				document.getElementById('menu3').disabled = true;
+			}
+		}
+
+		if (type == "refresh") {
+			if (subdivision == "is_connected") {
+				if (content == "True") {
+					alert("You are already connected to a session, we load it for you... \n(Click OK)")
+					document.getElementById('Boot_button').style.display = 'none';
+					document.getElementById('Shut_down_button').style.display = 'block';
+					document.getElementById("Choose_ip_port").style.display = "none";
+			    	document.getElementById('menu1').disabled = false;
+					document.getElementById('menu2').disabled = false;
+					document.getElementById('menu3').disabled = false;
+					document.getElementById('menu1').checked = true;
+					document.getElementById('menu2').checked = true;
+					document.getElementById('menu3').checked = true;
+					document.getElementById('error_connect').innerHTML = '';
+				}
+				
+			}
+		}
+
+
+
+
+	}
+	eel.expose(sendToGui) // send to python
+
+	function tryToBoot(){
+		console.log("pass")
+		document.getElementById('error_connect').innerHTML = '';
+		document.getElementById("Boot_button").style.display = "none";
+		eel.sendToPython('boot_socket&&...');
+	}
+
+	function identification(){
+		document.getElementById("Choose_ip_port").style.display = "none";
+		document.getElementById("Boot_button").style.display = "black";
+		IPv4 = prompt("Please enter the IP of the server", IPv4)
+		port = prompt("Please enter the port of the server", port)
+		eel.sendToPython('identification&&'+IPv4+":"+port);
+	}
+
+	function shutDown(){
+		try{
+			eel.sendToPython('turn_off&&...');
+			console.log("off")
+		} 
+		catch (error) {
+			console.log(error);window.close();
+		}
+	}
+
+	function link_file(file_name){
+		eel.sendToPython("link_file&&"+file_name)
+	}
+
+	function send_file(){
+		console.log("send_file")
+		document.getElementById("file_transfer_content").innerHTML = "";
+		document.getElementById("dest_file").innerHTML = "";
+		document.getElementById("dest_commit_list").style.display = "none";
+		document.getElementById("dest_list_clients").innerHTML = "";
+		document.getElementById("file_name").innerHTML = "";
+		//document.getElementById("send_file_button").style.display = "none";
+		document.getElementById("dest_file").innerHTML = "";
+		eel.sendToPython('send_file&&...')
+		// compléter et corriger
+	}
+
+	function commitList(){
+		var dest_list = []
+		for (dest in nicknames_dict){
+			try{
+				if (document.getElementById(dest.toString()).checked == true){
+				dest_list.push(dest.toString())
+				eel.sendToPython("file_des_dict&&"+dest_list.toString().replace("),(", ")°°("))
+				}
+			}
+			catch(error){
+				console.log("error"+error.toString())
+			}
+
+		}
+		console.log(dest_list)
+		send_file()
+	}
+
+
+</script>
+
+</head>
+<body>
+	<style type="text/css">
+		
+	</style>
+
+<h1 style="text-align: center; padding-top: 30px;">LocalNetworkServices v0.1</h1>
+	<br>
+
+<ul class="accordion">
+  <li class="has-sub">
+    <label for="menu1" id="label_menu">Message</label><input id="menu1" class="menu" name="menu" type="checkbox"/>
+    <ul class="sub">
+      <li>
+        <h2></h2>
+	<br>
+	<div id="entry_message">
+	<input type="text" id="message_contenue">
+	<!--<button onclick="callPython('message_contenue')" id="send_message_button"><z style="opacity: 0">Send</z>
+		<svg version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 448.011 448.011" style="enable-background:new 0 0 448.011 448.011; fill: white;" xml:space="preserve">
+			<g>
+				<g>
+					<path d="M438.731,209.463l-416-192c-6.624-3.008-14.528-1.216-19.136,4.48c-4.64,5.696-4.8,13.792-0.384,19.648l136.8,182.4
+			l-136.8,182.4c-4.416,5.856-4.256,13.984,0.352,19.648c3.104,3.872,7.744,5.952,12.448,5.952c2.272,0,4.544-0.48,6.688-1.472
+			l416-192c5.696-2.624,9.312-8.288,9.312-14.528S444.395,212.087,438.731,209.463z"/>
+				</g>
+			</g>
+		</svg>
+</button>-->
+</div>
+	<br><br>
+	<div id="message_content"></div>
+      </li>
+    </ul>
+  </li>
+
+
+
+  <li class="has-sub">
+    <label for="menu2" id="label_menu">File</label><input id="menu2" class="menu" name="menu" type="checkbox"/>
+    <ul class="sub">
+      <li>
+        <h2></h2>
+	<br>
+	<button id="select_file_button" onclick="pressButton('refresh_user_list'),callPython('file_transfer_contenue')">select a file</button>
+	<br>
+	<div id="file_transfer_content"></div>
+	<div id="file_name"></div>
+	<div id="dest_file"></div>
+	<div id="dest_list_clients"></div>
+	<button id="dest_commit_list" onclick="commitList()">Send the file</button>
+	<!--<button id="send_file_button" onclick="send_file()">Send the file</button>-->
+	<div id="progress_bar"></div>
+	<br>
+	Received files :
+	<br>
+	<div id="received_files"></div>
+      </li>
+    </ul>
+  </li>
+
+
+  <li class="has-sub">
+    <label for="menu3" id="label_menu">Settings</label><input id="menu3" class="menu" name="menu" type="checkbox"/>
+    <ul class="sub">
+      <li>
+      	<a>Nickname : </a><input type="text" id="nick_name_contenue"></textarea>
+	<button id="update_nickname_button" onclick="callPython('nick_name_contenue')">update »</button>
+	<br>
+	<div id="nick_name_content"></div>
+      </li>
+      <li>
+        <a>User list</a>
+        <button onclick="pressButton('refresh_user_list')">Refresh</button>
+		 <div id="users"></div>
+      </li>
+      <!--<li>
+        <a>Item #2</a>
+      </li>-->
+    </ul>
+  </li>
+</ul>
+<br>
+
+<div id="wrapper">
+
+    <button id="Boot_button" onclick="tryToBoot()">Boot</button>
+	<button id="Shut_down_button" onclick="shutDown()">Shut Down</button>
+	<button id="Choose_ip_port" onclick="identification()">Choose a new server address</button>
+
+</div>
+
+<br>
+<div id="error_connect" style="text-align: center;"></div>
+
+
+<div id="confirm_box" style="display: none;">
+	
+	<p style="color: black; text-align: center;" id="confirm_text">Default confirm box mesage.</p>
+	<div id="wrapper">
+		<button id="button_agree" onclick='eel.sendToPython("agree&&Yes"),document.getElementById("confirm_box").style.display = "none"'>Yes</button>
+		<button id="button_agree" onclick='eel.sendToPython("agree&&No"),document.getElementById("confirm_box").style.display = "none"'>No</button>
+	</div>
+</div>
+
+
+<script type="text/javascript">
+	document.getElementById("confirm_box").style.display = "none";
+	document.getElementById("Boot_button").style.display = "none";
+	document.getElementById("dest_commit_list").style.display = "none";
+	document.getElementById("Shut_down_button").style.display = "none";
+	document.getElementById('menu1').disabled = true;
+	document.getElementById('menu2').disabled = true;
+	document.getElementById('menu3').disabled = true;
+
+	eel.sendToPython('refresh&&is_connected')
+
+
+
+var wage = document.getElementById("message_contenue");
+wage.addEventListener("keydown", function (e) {
+    if (e.keyCode === 13) {
+        validate(e);
+    }
+});
+
+function validate(e) {
+    callPython('message_contenue');
+}
+</script>
+
+</body>
+</html>

@@ -1,14 +1,14 @@
 # LocalNetworkServices
 LocalNetworkServices is a program which facilitates interactions between computers on a local network.
 
-Hello ! I present to you my python LAN software.
+Hello ! I present to you my python LAN software !
 There is what you can do with this program :
 You can access some services on LAN (chat/message service, file service and settings service).
 - Message service : You can send messages to all the other clients (like a group chat).
 - File : You can send a file to one or more clients and the recipient(s) will accept the file.
 - Settings : You can actually only modify your nickname or view the others clients (nickname + ip with port).
 
-
+\n
 
 ### How does it work ?
  There are 2 major paths :

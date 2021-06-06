@@ -1,339 +1,258 @@
+import os
+import random
+import time
 import traceback
-import eel  # Web GUI
-import os  # file size
-import random  # eel local port selection
-import socket  # network client <---> server
-import threading  # multi-task capacity
-import time  # get transfer rate and push %
-from tkinter.filedialog import askopenfilename  # file browser
-from tkinter import Tk  # use for hide the blank window in tkinter while askopenfilename
-from colorama import init
-from termcolor import colored
+from threading import Thread
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
 
-""" Work of Cortale Romain @2021 """
-""" Description of the project """
-#####0##### EEL GUI #####2#####
-file_path_gui = ""
-file_name_gui = ""
-booted = False
-IPv4, port = None, None
-nick_name = 'Unknown'
-nicknames = dict()
-dest_file = None  # 192.168.1.60:12345
-file_history = dict()
-dest_file_dict = dict()
-dest_file_list = []
+import eel
+
+from dependencies import LiveTransmitter
+from dependencies import fileService as fService
+from dependencies import socketConnect as sockConnService
+
+nickname_by_address_dict = dict()
+sock = None
+current_gui_path = None
+current_gui_file_name = None
+list_clients_address_gui = []
+current_gui_address = None
+my_own_address = None
+feed_source = None
+C = None
 
 
-@eel.expose  # send the funtion to web
-def sendToPython(message):  ## Listen the GUI
-    global client_socket, nick_name, file_path_gui, file_name_gui, IPv4, port, booted, nicknames, dest_file, file_history, dest_file_dict, dest_file_list
-    print("[SendToPython] received : {}".format(message))
-    msg_splited = message.split("&&")
-
-    # message service
-    if msg_splited[0] == "message":  # send the massage to the server
-        message = HeaderCreator("::", ";;", {'type': 'message', 'from_client': nick_name, 'content': msg_splited[1]})
-        client_socket.send(message.encode())
+def remap_keys(mapping):
+    return [{'key': k, 'value': v} for k, v in mapping.items()]
 
 
-    # file service
-    elif msg_splited[0] == "file_transfer":
-        if msg_splited[1] == "GO":
+@eel.expose
+def sendToPython(data):
+    global sock, current_gui_path, current_gui_file_name, nickname_by_address_dict, list_clients_address_gui, current_gui_address
+
+    # pre-process the data
+    data_splited = data.split("||")
+    print(data)
+
+    if data_splited[0] == "message":
+
+        if data_splited[1] == "global":
+            response = str({'service': 'message', 'type': 'global', 'content': data_splited[2]}).encode()
+            sock.send(response)
+
+        if data_splited[1] == "private":
+
+            if data_splited[2] == "dest":
+                d = data_splited[3].replace('(', '("').replace(',', '",')
+                current_gui_address = eval(d)
+
+            if data_splited[2] == "content" and current_gui_address != None:
+                response = str({'service': 'message', 'type': 'private', 'content': data_splited[3],
+                                'client_dest_address': str(current_gui_address)}).encode()
+                sock.send(response)
+
+    if data_splited[0] == 'file':
+
+        if data_splited[1] == 'choose_a_file':
+            # file browser window
             root = Tk()
             root.withdraw()
             root.call('wm', 'attributes', '.', '-topmost', True)
-            # root.withdraw()
-            file_path_gui = askopenfilename(initialdir="/", title="Select a File", filetypes=(("all files", "*.*"),))
-            # Change label contents
-            file_name_gui = file_path_gui.split('/')[-1]
-            eel.sendToGui("file&&file_name&&{}°°{}".format(file_name_gui, file_path_gui))
+
+            # get file_name and path
+            current_gui_path = askopenfilename(initialdir="/", title="Select a File", filetypes=(("all files", "*.*"),))
+            # current_gui_path = current_gui_path.replace(" ", "_")
+            current_gui_file_name = current_gui_path.split('/')[-1]
             root.destroy()
-            print("[SendToPython/file_path] set : {}".format(file_path_gui))
 
-    elif msg_splited[0] == "send_file":
-        if file_path_gui != "":
-            header = HeaderCreator("::", ";;",
-                                   {'type': 'file_transfer', 'command': 'receive', 'file_name': file_name_gui,
-                                    'buffer': "200000", "dest_file": "dest_file", "dest_file_list": str(dest_file_list),
-                                    'from_client_name': nick_name})
-            client_socket.send(header.encode())
-            time.sleep(0.2)
-            FileSender(client_socket, file_path_gui, 200000)
-        else:
-            print("[SendToPython/send_file] No path_file.")
+            # return the infos to the GUI
+            eel.sendToGui("file||file_infos||{}||{}".format(current_gui_path, current_gui_file_name))
+            print("[SendToPython/file_path] set : {}".format(current_gui_path))
 
-    elif msg_splited[0] == "boot_socket":
-        if booted == False:
-            global IPv4, port
-            if IPv4 != None:
-                print("[SendToPython/boot_socket] Try to connect...")
-                ClientConnect(IPv4, port)
-                if client_socket != "error":
-                    threading.Thread(target=ListenServer, args=(client_socket,)).start()
-                    booted = True
+        if data_splited[1] == 'dest_clients_address':
+            list_clients_address_gui = eval(data_splited[2])
+            print(list_clients_address_gui)
 
-    elif msg_splited[0] == "turn_off":
-        eel.sendToGui("power&&off&&m")
+        if data_splited[1] == 'send':
+            request = str({'service': 'file', 'type': 'receive', 'client_dest_address': str(list_clients_address_gui),
+                           'file_name': current_gui_file_name, 'BUFFER': 200000}).encode()
+            print(str({'service': 'file', 'type': 'receive', 'client_dest_address': str(list_clients_address_gui),
+                       'file_name': current_gui_file_name, 'BUFFER': 200000}))
+            sock.send(request)
+            fService.FileSender(sock, current_gui_path, current_gui_file_name, 200000, eel_display=True, eel=eel)
+            # demander d'abord le agree du client ?
 
-    elif msg_splited[0] == "identification":
-        IPv4 = msg_splited[1].split(":")[0]
-        port = int(msg_splited[1].split(":")[1])
-        eel.sendToGui("power&&identification_saved&&Address saved for {}:{}. Please connect.".format(IPv4, port))
+        if data_splited[1] == 'agreement':
+            if data_splited[2] == 'Yes':
+                request = str({'service': 'file', 'type': 'agreement', 'command': 'Yes', 'file_id': data_splited[3],
+                               'file_name': data_splited[4], 'BUFFER': data_splited[5]}).encode()
+                sock.send(request)
+            else:
+                request = str({'service': 'file', 'type': 'agreement', 'command': 'No', 'file_id': data_splited[3],
+                               'file_name': data_splited[4], 'BUFFER': data_splited[5]}).encode()
+                sock.send(request)
 
-    elif msg_splited[0] == "refresh":
-        if msg_splited[1] == "is_connected":
-            eel.sendToGui("refresh&&is_connected&&{}".format(booted))
+        if data_splited[1] == 'open':
+            os.system(f"start client\download\{data_splited[2]}")
 
-    elif msg_splited[0] == "file_dest":
-        dat = msg_splited[1].replace("(", "").replace(")", "")
-        dest_file = dat
+    if data_splited[0] == 'nicknames':
 
-    elif msg_splited[0] == "file_des_dict":
-        dest_file_list = msg_splited[1].split("°°")
+        if data_splited[1] == 'get_IPs_and_nicknames':
+            request = str({'service': 'nicknames', 'type': 'get_IPs_and_nicknames'}).encode()
+            sock.send(request)
 
+        if data_splited[1] == 'get_my_own':
+            request = str({'service': 'nicknames', 'type': 'get_my_own'}).encode()
+            sock.send(request)
 
-    elif msg_splited[0] == "link_file":
-        for file in file_history:
-            if file_history[file] == msg_splited[1]:
-                os.system("start " + file)
+        if data_splited[1] == 'update':
+            request = str({'service': 'nicknames', 'type': 'update', 'content': data_splited[2]}).encode()
+            sock.send(request)
 
-    elif msg_splited[0] == "agree":
-        if msg_splited[1] == "Yes":
-            header = HeaderCreator("::", ";;", {'type': 'file_transfer', 'command': 'agree', 'agree': 'Yes'})
-            client_socket.send(header.encode())
-        if msg_splited[1] == "No":
-            header = HeaderCreator("::", ";;", {'type': 'file_transfer', 'command': 'agree', 'agree': 'No'})
-            client_socket.send(header.encode())
+    if data_splited[0] == 'video_feed':
 
+        if data_splited[1] == 'check_is_broadcasting':
+            request = str({'service': 'video_feed', 'type': 'check_is_broadcasting'}).encode()
+            sock.send(request)
 
+        if data_splited[1] == 'start_broadcasting':
+            global feed_source
+            if data_splited[2] == "camera":
+                feed_source = LiveTransmitter.ImageSource.Camera
+            elif data_splited[2] == "screen":
+                feed_source = LiveTransmitter.ImageSource.Screen
+            else:
+                print(data_splited[2])
+            request = str({'service': 'video_feed', 'type': 'start_streaming', 'source': data_splited[2]}).encode()
+            sock.send(request)
+            eel.sendToGui("video_feed||info||trying to launch the stream... Please wait.||next")
 
-
-
-    # settings service
-    elif msg_splited[0] == "nick_name":
-        nick_name = msg_splited[1]
-        header = HeaderCreator("::", ";;", {'type': 'nicknames', 'command': 'post', 'content': nick_name})
-        client_socket.send(header.encode())
-
-    # buttons pushed
-    elif msg_splited[0] == "button":
-        if msg_splited[1] == "refresh_user_list":
-            header = HeaderCreator("::", ";;", {'type': 'nicknames', 'command': 'get'})
-            client_socket.send(header.encode())
+        if data_splited[1] == 'stop':
+            global C
+            if C != None:
+                C.shutDown()
+                request = str({'service': 'video_feed', 'type': 'end_streaming'}).encode()
+                sock.send(request)
 
 
-    else:
-        print("[SendToPython] Command non detected")
-
-
-# eel.sendToGui("message&&m&&{}°°{}".format(from_client, content)) 
-
-#####0##### EEL GUI #####4#####
-
-
-#####2##### SOCKET #####0#####
-client_socket = None
-
-
-def ClientConnect(host, port):
-    try:
-        global client_socket
-        client_socket = socket.socket()
-        client_socket.connect((host, port))
-        eel.sendToGui("power&&on&&m")
-    except Exception as e:
-        print(colored("[ClientConnect] Error : {}".format(e), 'white', 'on_red'))
-        eel.sendToGui("power&&error&&{}".format(e))
-        client_socket = "error"
-
-
-def ListenServer(sock):  ## Listen the Server
-    while True:
+def ServerHandler(sock):
+    while type(sock) != str:
         try:
-            while True:
-                global client_socket, booted, nickames, file_history
-                # get type
-                req_raw = sock.recv(1024).decode()
-                req_d = ExtractInfosFromRequest(req_raw)
-                print("[ListenServer] Request receved {}".format(req_d))
 
-                # file_transfer
-                if req_d["type"] == "file_transfer":
-                    if req_d["command"] == "receive":
-                        # only receive data
-                        eel.sendToGui(
-                            "file&&received&&{}°°{}".format(req_d["from_client"], req_d["file_name"].replace(" ", "_")))
-                        FileReceiver(sock, "client/download/" + req_d["file_name"].replace(" ", "_"), req_d["buffer"])
-                        file_history[
-                            os.getcwd().replace("\\", "/") + "/client/download/" + req_d["file_name"].replace(" ",
-                                                                                                              "_")] = \
-                            req_d["file_name"].replace(" ", "_")
-                        print("[FILE] ENDED SUCCESFULLY!!!")
-                    elif req_d["command"] == "send":
-                        # tell the server to listen, send the file
-                        message = HeaderCreator("::", ";;", {'type': 'file_transfer', 'command': 'receive',
-                                                             'file_name': req_d["filename"].replace(" ", "_"),
-                                                             'destination': req_d["file_dest"]})
-                        sock.send(message.encode())  # order to the server to receive the file
-                        FileSender(sock, req_d["file_name".replace(" ", "_")])  # the client send the file
-                        # then the server will send the file to the dest. client
+            # receive and pre-process the data
+            req_raw = sock.recv(1024).decode()
+            req_d = eval(req_raw)
+            print(req_d)
 
-                    elif req_d["command"] == "get_agree_to_transfer":
-                        eel.sendToGui("file&&agree_to_send&&{}°°{}°°{}".format(req_d["from_client"], req_d["ip_dest"],
-                                                                               req_d["file_name"]))
+            # Message Service
+            if req_d['service'] == 'message':
+
+                if req_d['type'] == 'global':
+                    print("[GlobalMessage] {}".format(req_d['content']))
+                    eel.sendToGui("message||global||" + req_d['from_client'] + "||" + req_d['content'])
+
+                if req_d['type'] == 'private':
+                    eel.sendToGui("message||private||{}||{}".format(req_d['from_client'], req_d['content']))
+                    print("[PrivateMessage] {}".format(req_d['content']))
+
+            # File Service
+            if req_d['service'] == 'file':
+
+                if req_d['type'] == 'receive':
+                    req_d["file_name"] = req_d["file_name"].replace(" ", "_")
+                    print("RECEIVEING FILE ")
+                    fService.FileReceiver(sock, req_d['file_name'], req_d['BUFFER'], file_size=req_d['file_size'],
+                                          eel=eel, save_pre_ext="client/download/")
+                    eel.sendToGui("file||file_received_successfully||" + req_d['file_name'])
+
+                if req_d['type'] == 'getAgree':
+                    eel.sendToGui(
+                        "file||getAgree||{}||{}||{}||{}".format(req_d['file_name'], req_d['from_client_address'],
+                                                                req_d['file_id'], req_d['BUFFER']))
+
+            # Nicknames Service
+            if req_d['service'] == 'nicknames':
+
+                if req_d['type'] == 'receive_nicknames':
+                    global nickname_by_address_dict
+                    nickname_by_address_dict = dict()
+                    nickname_by_address_dict = req_d['content']
+                    eel.sendToGui(
+                        "nicknames||get_IPs_and_nicknames||" + str(remap_keys(nickname_by_address_dict)).replace("(",
+                                                                                                                 "[").replace(
+                            ")", "]").replace("'", '"'))
+
+                if req_d['type'] == 'get_my_own':
+                    global my_own_address
+                    my_own_address = req_d['content']
+                    eel.sendToGui("nicknames||get_my_own||" + str(my_own_address))
+
+                if req_d['type'] == 'order_to_refresh':
+                    request = str({'service': 'nicknames', 'type': 'get_IPs_and_nicknames'}).encode()
+                    sock.send(request)
+
+            # Video_feed Service
+            if req_d['service'] == 'video_feed':
+
+                if req_d['type'] == 'check_is_broadcasting':
+                    eel.sendToGui("video_feed||check_is_broadcasting||"+str(req_d['content'])+"||"+str([req_d['web_address'][0], req_d['web_address'][1]]))
+
+                if req_d['type'] == 'streaming_port':
+                    time.sleep(2)
+                    # client
+                    print(req_d['image_bytes_socket_address'])
+                    global feed_source, C
+                    C = LiveTransmitter.Web_Server(feed_source, scale=1)
+                    print("connect")
+                    C.connect(req_d['image_bytes_socket_address'], type_of_conn=LiveTransmitter.Web_Server.Slave,
+                              mode=LiveTransmitter.Web_Server.sender)
+                    C.start()
+                    print("started")
+                    eel.sendToGui(
+                        "video_feed||info||<p style='background-color: green; color: white'>You are streaming now !<p/>||erase")
+
+                    eel.sendToGui("video_feed||started")
+                    time.sleep(1)
+
+                if req_d['type'] == 'live_link':
+                    eel.sendToGui(
+                        f"video_feed||video_link||{req_d['content'][0]}||{req_d['content'][1]}||{[req_d['from_address'][0], req_d['from_address'][1]]}")
+
+                if req_d['type'] == 'stoped':
+                    eel.sendToGui("video_feed||stoped")  # create the web feed video stop part in Sublime Text*
+                    eel.sendToGui(
+                        "video_feed||info||<p style='background-color: red; color: white'>Stream closed !<p/>||erase")
 
 
-                # settings
-                elif req_d["type"] == "nicknames":
-                    if req_d["command"] == "receive":
-                        nicknames = ExtractInfosFromRequest(req_d["content"], define_marker="££", pause_marker="§§")
-                        eel.sendToGui("users&&post&&{}".format(DictToStr(nicknames)))
-
-                # message
-                elif req_d["type"] == "message":
-                    eel.sendToGui("message&&m&&{}°°{}".format(req_d["from_client"], req_d["content"]))
-
-                else:
-                    print("[ListenServer] ErrorRequest : {}".format(req_d["command"]))
 
 
 
         except Exception as e:
+            print(type(e).__name__)
+            if type(e).__name__ == "ConnectionResetError":
+                print("Connection with the server lost !")
+                eel.sendToGui("global||exit")
+                sockConnService.winMessage("error", title="Fatal error", msg="Connection lost with the server...\nPlease close this message box to completely terminate the program.")
+                exit()
+            print("[ServerHandler] Error : {}".format(e))
             traceback.print_exc()
-            # print("[ListenServer] Error : {}".format(e))
-            print(colored("[ListenServer] Error : {}".format(e), 'white', 'on_red'))
-            if str(type(e).__name__) == "ConnectionResetError" and str(
-                    e.args[0]) == "10054":  # = to connection lost with the server
-                try:
-                    # eel.sendToGui("power&&off&&m")
-                    eel.sendToGui("power&&reconnect&&m")
-                    # client_socket.close()
-                    client_socket = None
-                    booted = False
-                except:
-                    pass
-                break
 
-            if str(type(e).__name__) == "ConnectionResetError" and str(
-                    e.args[0]) == "10053":  # = to connection lost with the server
-                try:
-                    # eel.sendToGui("power&&off&&m")
-                    eel.sendToGui("power&&reconnect&&m")
-                    # client_socket.close()
-                    client_socket = None
-                    booted = False
-                except:
-                    pass
-                break
-
-                # exit()
+    time.sleep(1)
+    print("exit")
+    eel.sendToGui("global||exit")
+    exit()
 
 
-#####0##### SOCKET #####5#####
-
-
-########## REQUEST PROCESS ##########
-def ExtractInfosFromRequest(request, define_marker="::", pause_marker=";;"):
-    header = None
+#sock = sockConnService.ClientConnect("192.168.56.1", 8081)
+while True:
+    address = sockConnService.getConnectionInfoBox()
     try:
-        headers = request.split(pause_marker)
-        temp_dict = dict()
-        for header in headers:
-            temp_dict[header.split(define_marker)[0]] = header.split(define_marker)[1]
-        header = temp_dict
-        return header
-    except Exception as e:
-        print(colored("[ExtractInfosFromRequest] Error : {}".format(e), 'white', 'on_red'))
-        return dict
-
-
-def HeaderCreator(define_marker, pause_marker, dict_header, start_marker='', end_marker=''):
-    head = start_marker
-    i = 0
-    for dict_name in dict_header:
-        i += 1
-        if i == len(dict_header):
-            head += dict_name + define_marker + dict_header[dict_name]
-        else:
-            head += dict_name + define_marker + dict_header[dict_name] + pause_marker
-    head += end_marker
-    return head
-
-
-########## REQUEST PROCESS ##########
-
-
-########## FILE TRANSFER ##########
-def FileReceiver(socket, file_name, BUFFER):
-    try:
-        with open(file_name, 'wb') as f:
-            while True:
-                # print('receiving data...')
-                data = socket.recv(int(BUFFER))
-                # print(len(data))
-                if "end_file_transfer".encode() in data:
-                    data = data.replace("end_file_transfer".encode(), "".encode())
-                    f.write(data)
-                    # print(data)
-                    break
-                # print('data={}'.format(data))
-                # write data to a file
-                f.write(data)
-            f.close()
-        print("[FileReceiver] File received successfully !")
-    except Exception as e:
-        print(colored("[FileReceiver] Error : {}".format(e), 'white', 'on_red'))
-
-
-def FileSender(socket, file_name, BUFFER):
-    try:
-        # filename='video.mp4' #In the same folder or path is this file running must the file you want to tranfser to be
-        f = open(file_name, 'rb')
-        l = f.read(BUFFER)
-        file_size = os.path.getsize(file_name)
-        file_transfer = int(BUFFER)
-        t = time.time()
-        while (l):
-            # print('Sent '+repr(l))
-            socket.send(l)
-            l = f.read(BUFFER)
-            last_tr = file_transfer
-            file_transfer += int(BUFFER)
-            if time.time() > t + 1:
-                print(file_transfer / file_size)
-                print("Transfer rate : " + str((file_transfer - last_tr) / 1000000) + "Mb/s")
-                eel.sendToGui("file&&progress&&{}".format(file_transfer / file_size))
-                t = time.time()
-                last_tr = file_transfer
-        f.close()
-        eel.sendToGui("file&&progress&&{}".format(1))
-        socket.send("end_file_transfer".encode())
-        socket.send("end_file_transfer".encode())
-        print("[FileSender] File sended successfully !")
-    except Exception as e:
-        traceback.print_exc()
-        print(colored("[FileSender] Error : {}".format(e), 'white', 'on_red'))
-
-
-########## FILE TRANSFER ##########
-
-
-### OTHER ###
-def DictToStr(dic):
-    i = 0
-    output = "{"
-    for di in dic:
-        if i == len(dic):
-            output += di + "::" + dic[di]
-        else:
-            output += di + "::" + dic[di] + ",,"
-    output += "}"
-    return output
-
-
-### OTHER ###
-
+        sock = sockConnService.ClientConnect(address[0], address[1])
+        break
+    except:
+        pass
+Thread(target=ServerHandler, args=(sock,), daemon=True).start()
 
 ########## EEL - MAIN ##########
 eel_port = random.randint(1000, 9999)
@@ -341,13 +260,11 @@ eel.init("client")
 try:
     eel.start("index.html", port=eel_port, block=False)
 except:
-    print("error eel")
-    i = 0
-    while i == 0:
+    while True:
         try:
             eel.start("index.html", port=random.randint(1000, 9999), block=False)
             print("[Main] Port eel found")
-            i = 1
+            break
         except:
             pass
 
@@ -355,14 +272,10 @@ while True:
     try:
         eel.sleep(0.01)
     except:
-        from tkinter import messagebox
+        time.sleep(1.5)
+        print("Global error")
 
-        root = Tk()
-        root.withdraw()
-        root.call('wm', 'attributes', '.', '-topmost', True)
-        messagebox.showerror("Critical error",
-                             "We can't provide the 'LAN Services' on this session.\nPlease, relaunch the software.")
-        root.destroy()
-        break
-########## EEL - MAIN ##########
-# add a freeze to the window during the download
+
+""" 
+- Ajouter la fenêtre de connexion pour sock au dessus de eel - main
+"""

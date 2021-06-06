@@ -1,257 +1,270 @@
-import threading # manage multiple clients at the same time
-import socket # network server
-import time # usefull during the client 
-import os # get file size and open downloaded files
-import traceback # debug lib
-import ast # convert str(type) to type itself
-from tkinter import Tk # simple GUI for get the IPv4 and the port
-from tkinter.simpledialog import askstring, askinteger # idem
+import os
+import random
+import socket
+import time
+import traceback
+from threading import Thread
+
+from dependencies import LiveTransmitter
+from dependencies import fileService as fService
+from dependencies import messageService as msgService
+from dependencies import socketConnect as sockConnService
+
+client_and_nickname_by_address_dict = dict()
+client_by_id_dict = dict()
+file_process_queue = dict()
+client_dest_file = []
+W_transmission = None
+broadcaster_dic = dict()
+
+server_feed = None
 
 
-""" add a function for the file downloading """
-
-########## SOCKET ##########
-server_socket = None # socket of the server
-clients = [] # [(is, socket, address)]
-client_data_recognition = dict() # {address: ('nickname', client_socket)}
-
-# temp variables
-client_name = ""
-filename = ""
-dest_file = None
-
-# look at the bug wen a client exit (it doesn't really left from the user list refresh and file)
-
-def Connect(host_IPv4, host_port): # connect the server
-    global server_socket
-    try:
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((host_IPv4, host_port))
-        server_socket.listen(5)
-        print("[SERVER] Server is connected !")
-
-    except Exception as e:
-        raise Exception("\033[31m[SERVER] Connection Error... {}\033[0m".format(e))
-    return server_socket
-
-
-def Reception(): # accept new clients and assign them a thread
+def Check_video_feed(Class_video, client_by_id_dict):
     while True:
-        global clients, server_socket, client_data_recognition
-        try:
-            (client_socket, address) = server_socket.accept()
-            id_client = len(clients)
-            clients.append((id_client, client_socket, address))
-            client_data_recognition[clients[id_client][2]] = ("Unknown", client_socket)
-            print("\033[32m[Reception] Thread created for client from {}\033[0m".format(address))
-            threading.Thread(target=ClientHandler, args=(server_socket, clients[id_client])).start() # create a thread which will run the ClientHandler()
-
-
-        except Exception as e:
-            print("\033[31m")
-            traceback.print_exc()
-            print("[Reception] Errorr : {}\033[0m".format(e))
+        if Class_video.server_is_running == False:
+            clients = []
+            for cl in client_by_id_dict:
+                clients.append(client_by_id_dict[cl])
+            request = str({'service': 'video_feed', 'type': 'stoped'}).encode()
+            msgService.Broadcast(request, clients)
             break
 
 
-def ClientHandler(s, client_info):
-    print("[ClientHandler] Start receiver from {}".format(client_info[2]))
+def ReceptionRoom():
     while True:
-        global clients, client_data_recognition, client_name, filename, dest_file
-        try: # check if an user's here
-            # process the request
-            req_raw = client_info[1].recv(1024).decode()
-            req_d = ExtractInfosFromRequest(req_raw)
-            print(req_d)
-
-            # message handler
-            if req_d["type"] == "message": # distribute the message to all the clients
-                response = HeaderCreator("::", ";;", {'type':'message', 'from_client':req_d["from_client"], 'content':req_d["content"]})
-                Broadcast(response.encode(), client_info)
-                
-
-
-            # file handler
-            elif req_d["type"] == "file_transfer":
-                if req_d["command"] == "receive":
-                    FileReceiver(client_info[1], "server/download/"+req_d["file_name"].replace(" ", "_"), req_d["buffer"])
-                    dests = get_destinations(req_d["dest_file_list"])
-                    client_name = req_d["from_client_name"]
-                    ipport = client_info[2]
-                    if dests != {}: # make sure it's okay
-                        # Send the agree message to all people
-                        response = HeaderCreator("::", ";;", {'type': 'file_transfer',
-                                                              'from_client': client_name, 'ip_dest':ipport,
-                                                              'command': 'get_agree_to_transfer', 'file_name': req_d["file_name"]})
-                        for dest_ in dests: # send the agree consent
-                            dest_[1].send(response.encode())
-                        filename = req_d["file_name"]
-                elif req_d["command"] == "agree":
-                    if req_d["agree"] == "Yes":
-                        response = HeaderCreator("::", ";;", {'type': 'file_transfer',
-                                                              'from_client': client_name,
-                                                              'command': 'receive', 'file_name': filename,
-                                                              'buffer': '200000'})
-                        client_info[1].send(response.encode())
-                        FileSender(client_info[1], "server/download/"+filename.replace(" ", "_"), 200000)
-                        print("[ClientHandler] File service entirely complete")
-                    else:
-                        print("no agreement !")
-
-
-            # nicknames handler
-            elif req_d["type"] == "nicknames":
-                if  req_d["command"] == "post":
-                    print("saving of nickanames...")
-                    client_data_recognition[client_info[2]] = req_d["content"], client_data_recognition[client_info[2]][1]
-                elif req_d["command"] == "get":
-                    only_nicknames = dict()
-                    for dat in client_data_recognition:
-                        only_nicknames[dat] = client_data_recognition[dat][0]
-                    header = header = HeaderCreator("::", ";;", {'type':'nicknames', 'command':'receive', 'content':HeaderCreator("££", "§§", only_nicknames)})
-                    client_info[1].send(header.encode())
-                    
-
-
-        # errors handler
-        except Exception as e:
-            # if is an error in this thread, it will be kick
-            print("\033[31m")
-            traceback.print_exc()
-            print("[ClientHandler] Exception : {}".format(e))
-            print("disconnect : {}\033[0m".format(client_info[2]))
-            client_info[1].close() # kick the client
-            # del the infos from the kicked client
-            del client_data_recognition[client_info[2]]
-            try: del clients[client_info[0]]
-            except: pass
-            break # kill the thread
-
-
-def Broadcast(data, client_info): # send a message to all the clients
-    try:
-        global clients
-        message = data
-        if len(clients) != 0:
-            for client in clients:
-                print(client[2])
-                try:
-                    client[1].send(message)
-                except:
-                    print("\033[31m[Broadcast] Error : {}\033[0m".format(e))
-        else:
-            print("[Broadcast] Nobody is connected.")
-    except Exception as e:
-        print("\033[31m")
-        traceback.print_exc()
-        print("[Broadcast] Error : {}\033[0m".format(e))
-
-########## SOCKET ##########
-
-########## REQUEST PROCESS ##########
-def ExtractInfosFromRequest(request): # tranform the client request into a dict like {type : 'x', command: 'x', path_file : 'x'...}
-    header = None
-    try:
-        headers = request.split(';;')
-        temp_dict = dict()
-        for header in headers:
-            temp_dict[header.split('::')[0]] = header.split('::')[1]
-        header = temp_dict
-        return header
-    except Exception as e:
-        print("\033[31m[ExtractInfosFromRequest] Error : {}\033[0m".format(e))
-        return dict
-
-def HeaderCreator(define_marker, pause_marker, dict_header, start_marker='', end_marker=''): # transform a dict into a request for the client (it's the opposite of ExtractInfosFromRequest(request))
-    head = start_marker
-    i = 0
-    for dict_name in dict_header:
-        i += 1
-        if i == len(dict_header):
-            head += str(dict_name) + define_marker + str(dict_header[dict_name])
-        else:
-            head += str(dict_name) + define_marker + str(dict_header[dict_name]) + pause_marker
-    head += end_marker
-    return head
-
-# these 2 functions are the came in the cliend programm (it does like a transmission protocol)
-
-
-
-########## FILE TRANSFER ##########
-
-def FileReceiver(socket, file_name, BUFFER): # receive a file from a client util it receives the end tranfert message
-    print("[FileReceiver] lunched")
-    try:
-        with open(file_name, 'wb') as f:
-            while True:
-                data = socket.recv(int(BUFFER))
-                if "end_file_transfer".encode() in data:
-                    data = data.replace("end_file_transfer".encode(), "".encode())
-                    f.write(data)
-                    break
-                f.write(data)
-            f.close()
-    except Exception as e:
-        print("\033[31m")
-        traceback.print_exc()
-        print("[FileReceiver] Error : {}\033[0m".format(e))
-    print("[FileReceiver] ended successfully")
-
-def FileSender(socket, file_name, BUFFER): # the opposite
-    try:
-        f = open(file_name, 'rb')
-        l = f.read(int(BUFFER))
-        file_size = os.path.getsize(file_name)
-        file_transfer = int(BUFFER)
-        t = time.time()
-        while (l):
-            socket.send(l)
-            l = f.read(BUFFER)
-            file_transfer += int(BUFFER)
-            if time.time() > t + 1:
-                print(file_transfer / file_size)
-                t = time.time()
-        f.close()
-        socket.send("end_file_transfer".encode())
-        print("[FileSender] File sent !")
-    except Exception as e:
-        print("\033[31m")
-        traceback.print_exc()
-        print("[FileSender] Error : {}\033[0m".format(e))
-
-def get_destinations(dest_file_list): # create a list of diffusion for the file
-    global client_data_recognition
-    traceback.print_exc()
-    dests = []
-    dest_file_list = ast.literal_eval(dest_file_list)
-    for ct in dest_file_list:
+        global server_socket, client_and_nickname_by_address_dict, client_by_id_dict, broadcaster_dic
         try:
-            dests.append((client_data_recognition[ast.literal_eval(ct)][0], client_data_recognition[ast.literal_eval(ct)][1], ct, ast.literal_eval(ct)))
-        except:
-            pass
-    print("dests : {}".format(dests))
-    return dests # [('pseudo', <socket>, str(ipport), tupple(ipport)),...]
+            client_socket, address_tupple = server_socket.accept()
+
+            # save client informations
+            id_c = len(client_by_id_dict)
+            client_by_id_dict[id_c] = client_socket
+            client_and_nickname_by_address_dict[address_tupple] = ("Unknown", client_socket)
+            broadcaster_dic[address_tupple] = (False, (None, None))
+
+            # start exchange with the client
+            print("\033[92m[ReceptionRoom] New client : {}:{} ! \033[0m".format(address_tupple[0], address_tupple[1]))
+            Thread(target=ClientHandler, args=(id_c, address_tupple, client_socket)).start()
+
+        except Exception as e:
+            print("\033[32m[ReceptionRoom] Error {}\033[0m".format(e))
+            break
 
 
-########## FILE TRANSFER ##########
+def ClientHandler(id_c, address, client_socket):
+    while True:
+        global client_and_nickname_by_address_dict, client_by_id_dict, client_dest_file
+
+        try:
+
+            # get the request and transform it to a dict
+            raw_q = client_socket.recv(1024)
+            try:
+                req_d = eval(raw_q)
+                print(req_d)
+            except Exception as e:
+                print("\033[31m [ClientHandler.raw_q] Error : {}\033[0m".format(e))
+                req_d = {'service': 'None caused by an error'}
+
+            # Message Service
+            if req_d['service'] == 'message':
+
+                if req_d['type'] == 'global':  # private message
+                    clients = []
+                    for cl in client_by_id_dict:
+                        clients.append(client_by_id_dict[cl])
+                    request = str({'service': 'message', 'type': 'global', 'content': req_d['content'],
+                                   'from_client': client_and_nickname_by_address_dict[address][0]}).encode()
+                    msgService.Broadcast(request, clients)
+
+                if req_d['type'] == 'private':  # global message
+                    client_dest = client_and_nickname_by_address_dict[eval(req_d['client_dest_address'])][1]
+                    request = str({'service': 'message', 'type': 'private', 'content': req_d['content'],
+                                   'from_client': client_and_nickname_by_address_dict[address][0]}).encode()
+                    client_dest.send(request)
+
+            # File Service
+            # ajouter un token unique par téléchargement (un aléatoire par destination de client)
+            if req_d['service'] == 'file':
+
+                if req_d['type'] == 'receive':  # receive and distribute the message
+
+                    fService.FileReceiver(client_socket, req_d['file_name'], req_d['BUFFER'], save_pre_ext="server/download/")
+
+                    d = eval(req_d['client_dest_address'])
+                    if type(d) == tuple:
+                        d = [d]
+
+                    print(d)
+
+                    client_dest_file = []
+                    for i in range(len(d)):
+                        client_dest_file.append(client_and_nickname_by_address_dict[d[i]][1])
+
+                    request = []
+                    global file_process_queue
+                    for i in range(len(d)):
+                        file_id = random.randint(0, 10000)
+                        request.append(str({'service': 'file', 'type': 'getAgree', 'file_name': req_d['file_name'],
+                                            'from_client_address': address, 'file_id': file_id,
+                                            'BUFFER': req_d['BUFFER']}).encode())
+                        file_process_queue[file_id] = (req_d['file_name'], address)
+                        print(file_process_queue)
+
+                    # send the agree
+                    msgService.Broadcast(request, client_dest_file, unique=True)
+
+                if req_d['type'] == 'agreement':
+
+                    if req_d['command'] == 'Yes':
+                        global file_process_queue_dict
+                        try:
+                            print(file_process_queue[int(req_d['file_id'])][0])
+                            print(req_d['file_name'])
+                            print(file_process_queue[int(req_d['file_id'])][0] == req_d['file_name'])
+                            if file_process_queue[int(req_d['file_id'])][0] == req_d['file_name']:
+                                request = str({'service': 'file', 'type': 'receive', 'file_name': req_d['file_name'],
+                                               'from_client_address': file_process_queue[int(req_d['file_id'])][1],
+                                               'BUFFER': int(req_d['BUFFER']),
+                                               'file_size': os.path.getsize("server/download/" + req_d['file_name'])}).encode()
+                                print(request)
+                                client_socket.send(request)
+                                fService.FileSender(client_socket, "server/download/" + req_d['file_name'], req_d['file_name'],
+                                                    req_d['BUFFER'])
+                                del file_process_queue[int(req_d['file_id'])]
+                                print(file_process_queue)
+
+                            else:
+                                print("[ClientHandler.fileService] file_process_queue_dict error")
+                                print("Original queue : {}".fomat(file_process_queue))
+                                print("File id and file_name received {} | {}".format(req_d['file_id'],
+                                                                                      req_d['file_name']))
+                        except Exception as e:
+                            print(e)
+                    else:
+                        try:
+                            del file_process_queue[int(req_d['file_id'])]
+                        except:
+                            print("file process queue del error")
+
+            # Nicknames Service
+            if req_d['service'] == 'nicknames':
+
+                if req_d['type'] == 'update':
+                    client_and_nickname_by_address_dict[address] = (req_d['content'], client_socket)
+
+                if req_d['type'] == 'get_IPs_and_nicknames':
+
+                    nickname_by_address_dict = dict()
+                    for client_address in client_and_nickname_by_address_dict:
+                        nickname_by_address_dict[client_address] = client_and_nickname_by_address_dict[client_address][
+                            0]
+
+                    request = str({'service': 'nicknames', 'type': 'receive_nicknames',
+                                   'content': nickname_by_address_dict}).encode()
+                    client_socket.send(request)
+
+                if req_d['type'] == 'get_my_own':
+                    request = str({'service': 'nicknames', 'type': 'get_my_own', 'content': str(address)}).encode()
+                    client_socket.send(request)
+
+            # Video_feed Service
+            if req_d['service'] == 'video_feed':
+
+                if req_d['type'] == 'start_streaming':
+                    global server_feed, ip, W_transmission, broadcaster_dic
+
+                    # send a request for refresh nicknames
+                    clients = []
+                    for cl in client_by_id_dict:
+                        clients.append(client_by_id_dict[cl])
+                    request = str({'service': 'nicknames', 'type': 'order_to_refresh', }).encode()
+                    msgService.Broadcast(request, clients)
+
+                    image_bytes_socket_port = sockConnService.found_free_port()  # search a free port for stream the video
+                    image_bytes_socket_address = (ip, image_bytes_socket_port)
+                    print(image_bytes_socket_address)
+
+                    web_handler_socket_port = sockConnService.found_free_port(
+                        different_of=image_bytes_socket_port)  # search a free port for stream the video
+                    web_handler_socket_address = (ip, web_handler_socket_port)
+                    print(web_handler_socket_address)
+
+                    # server
+                    W_transmission = LiveTransmitter.Web_Server(LiveTransmitter.ImageSource.Screen, scale=1)
+                    W_transmission.connect([image_bytes_socket_address, web_handler_socket_address],
+                                           type_of_conn=LiveTransmitter.Web_Server.Master,
+                                           mode=LiveTransmitter.Web_Server.distributor)
+
+                    request = str({'service': 'video_feed', 'type': 'streaming_port',
+                                   'image_bytes_socket_address': image_bytes_socket_address,
+                                   'web_handler_socket_address': web_handler_socket_address}).encode()
+                    client_socket.send(request)
+                    print("W.start()")
+                    W_transmission.start()
+
+                    # check if the Video feed is running and order to the GUIs to close it when it's off
+                    Thread(target=Check_video_feed, args=(W_transmission, client_by_id_dict)).start()
+
+                    # put the user in the broadcaster dict
+                    global broadcaster_dic
+                    broadcaster_dic[address] = (True, web_handler_socket_address)
+
+                    time.sleep(1)
+
+                    # send the video feed link
+                    clients = []
+                    for cl in client_by_id_dict:
+                        clients.append(client_by_id_dict[cl])
+                    request = str({'service': 'video_feed', 'type': 'live_link',
+                                   'content': [web_handler_socket_address[0], web_handler_socket_address[1]],
+                                   'from_client': client_and_nickname_by_address_dict[address][0],
+                                   'from_address': address}).encode()
+                    msgService.Broadcast(request, clients)
+
+                if req_d['type'] == 'end_streaming':
+                    if broadcaster_dic[address][0] == True:
+                        W_transmission.shutDown()
+                        broadcaster_dic[address] = (False, (None, None))
+                    else:
+                        print("broadcast_dict doesn't match with the address")
+
+                if req_d['type'] == 'check_is_broadcasting':
+                    request = str({'service': 'video_feed', 'type': 'check_is_broadcasting', 'content':broadcaster_dic[address][0], 'web_address':broadcaster_dic[address][1]}).encode()
+                    client_socket.send(request)
+
+                    # send the port
 
 
 
-while True: # get the infos for connect the server socket
-    root = Tk()
-    root.withdraw()
-    root.call('wm', 'attributes', '.', '-topmost', True)
-    IPv4 = askstring("Configuration - IP", "Please set the IP")
-    Port = askstring("Configuration - port", "Please set the port (integger like 1234)")
-    root.destroy()
-    try:
-        Connect(IPv4, int(Port))
+        # del the client
+        except Exception as e:
+            traceback.print_exc()
+            print("\033[31m [ClientHandler] Error : {}".format(e))
+            client_socket.close()
+            del client_and_nickname_by_address_dict[address]
+            del client_by_id_dict[id_c]
+            broadcaster_dic[address] = (False, (None, None))
+            print("[ClientHandler] Client {} succesfully disconnected ! \033[0m")
+            break
+
+# clean the download server path:
+for f in os.listdir("server\\download\\"):
+    os.remove(os.path.join("server\\download\\", f))
+
+
+# connect the server
+print("launch start")
+while True:
+    port = random.randint(1000, 9999)
+    port = 8081
+    ip = socket.gethostbyname(socket.gethostname())
+    server_socket = sockConnService.ServerConnect(ip, port)
+
+    if server_socket != "error":
+        Thread(target=sockConnService.winMessage, args=("infoConn", ip, port)).start()
         break
-    except Exception as e:
-        print("\033[31m[Main] Error : {}\033[0m".format(e))
 
-threading.Thread(target=Reception).start()
-
-while True: # infinite loop
-    pass
+# launch the server
+Thread(target=ReceptionRoom).start()
